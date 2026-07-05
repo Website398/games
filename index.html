@@ -334,7 +334,7 @@
   // ---------- 2-player hotseat match state (also auto-saved so a reload never loses it) ----------
   let matchScores = { 1:0, 2:0 };
   let matchWaves = { 1:0, 2:0 };
-  let playerShip = { 1:'shivam', 2:'shivangi' };
+  let playerShip = { 1:'player 1', 2:'player 2' };
   let currentPlayerNum = 1;
 
   const MATCH_KEY = 'sr_match_state_v2';
@@ -361,14 +361,14 @@
   // ---------- Ship roster ----------
   const SHIPS = {
     shivam: {
-      id:'shivam', name:'SHIVAM', gender:'BOY PILOT ♂', title:'Heavy Striker',
+      id:'player 1', name:'player 1', title:'Heavy Striker',
       color:'#33e6ff', color2:'#0a6b8a', glow:'#33e6ff', trail:'51,230,255',
       speed:4.1, fireDelay:9, dmg:1, hpBonus:1,
       desc:'Bhaari hull, strong firepower. Thoda slow par tough.',
       stats:{ speed:2, fire:3, armor:4 }
     },
     shivangi: {
-      id:'shivangi', name:'SHIVANGI', gender:'GIRL PILOT ♀', title:'Swift Interceptor',
+      id:'player 2', name:'player 2', title:'Swift Interceptor',
       color:'#ff3d7a', color2:'#8a0a3f', glow:'#ff3d7a', trail:'255,61,122',
       speed:5.1, fireDelay:7.5, dmg:1, hpBonus:0,
       desc:'Tez aur fauji — kam armor par fast fire aur dodge.',
