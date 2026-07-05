@@ -308,11 +308,32 @@
   let highScore = 0;
   try{ highScore = parseInt(localStorage.getItem('sr_highscore')||'0',10) || 0; }catch(e){}
 
-  // ---------- 2-player hotseat match state ----------
+  // ---------- 2-player hotseat match state (also auto-saved so a reload never loses it) ----------
   let matchScores = { 1:0, 2:0 };
   let matchWaves = { 1:0, 2:0 };
   let playerShip = { 1:'shivam', 2:'shivangi' };
   let currentPlayerNum = 1;
+
+  const MATCH_KEY = 'sr_match_state_v1';
+  function saveMatchState(extra){
+    try{
+      const state = Object.assign({
+        matchScores, matchWaves, playerShip, currentPlayerNum,
+        stage: 'lobby'
+      }, extra||{});
+      localStorage.setItem(MATCH_KEY, JSON.stringify(state));
+    }catch(e){ /* storage might be unavailable — game still works, it just won't resume */ }
+  }
+  function clearMatchState(){
+    try{ localStorage.removeItem(MATCH_KEY); }catch(e){}
+  }
+  function loadMatchState(){
+    try{
+      const raw = localStorage.getItem(MATCH_KEY);
+      if(!raw) return null;
+      return JSON.parse(raw);
+    }catch(e){ return null; }
+  }
 
   // ---------- Ship roster ----------
   const SHIPS = {
@@ -374,6 +395,31 @@
   }
 
   // ---------- Lobby screens (select -> turn-over -> final result) ----------
+  // All wrapped in try/catch + a safe fallback so a rendering hiccup NEVER
+  // leaves the game "stuck" requiring a manual reload.
+  function safeRun(fn, fallbackLabel){
+    try{
+      fn();
+    }catch(err){
+      console.error('UI render error at ' + fallbackLabel + ':', err);
+      // Fallback: show a minimal recovery screen instead of freezing.
+      lobby.innerHTML = `
+        <div class="sub" style="color:var(--neon2)">OOPS</div>
+        <h1>SCREEN GLITCH</h1>
+        <p style="text-align:center;">Kuch atak gaya tha, par ab reload ki zaroorat nahi hai — neeche button dabao.</p>
+        <button id="recoverBtn">CONTINUE</button>
+      `;
+      overlay.classList.remove('hidden');
+      const btn = document.getElementById('recoverBtn');
+      if(btn){
+        btn.addEventListener('click', ()=>{
+          const nextPlayer = currentPlayerNum===1 ? 2 : 1;
+          safeRun(()=> buildSelectScreen(nextPlayer), 'recovery->select');
+        });
+      }
+    }
+  }
+
   function beginRun(playerNum){
     ensureAudio();
     playerShip[playerNum] = selectedShip;
@@ -381,6 +427,7 @@
     overlay.classList.add('hidden');
     running = true;
     resetGame();
+    saveMatchState({ stage:'playing' });
     loopTime = performance.now();
     requestAnimationFrame(loop);
   }
@@ -404,13 +451,14 @@
       <button id="startBtn">START PLAYER ${playerNum} MISSION</button>
     `;
     renderShipCardsInto(document.getElementById('shipCards'));
-    document.getElementById('startBtn').addEventListener('click', ()=> beginRun(playerNum));
+    document.getElementById('startBtn').addEventListener('click', ()=> safeRun(()=> beginRun(playerNum), 'beginRun'));
+    saveMatchState({ stage:'select', pendingPlayer: playerNum });
   }
 
   function buildTurnOverScreen(finishedPlayer, finishedScore, finishedWave){
     const nextPlayer = finishedPlayer===1 ? 2 : 1;
     const accent = finishedPlayer===1 ? 'var(--neon)' : 'var(--neon2)';
-    const ship = SHIPS[playerShip[finishedPlayer]];
+    const ship = SHIPS[playerShip[finishedPlayer]] || SHIPS.shivam;
     lobby.innerHTML = `
       <div class="sub" style="color:${accent}">PLAYER ${finishedPlayer} MISSION OVER</div>
       <h1>SHIP DESTROYED</h1>
@@ -422,7 +470,8 @@
       <button id="continueBtn">CONTINUE — PLAYER ${nextPlayer}'S TURN</button>
     `;
     overlay.classList.remove('hidden');
-    document.getElementById('continueBtn').addEventListener('click', ()=> buildSelectScreen(nextPlayer));
+    document.getElementById('continueBtn').addEventListener('click', ()=> safeRun(()=> buildSelectScreen(nextPlayer), 'turnOver->select'));
+    saveMatchState({ stage:'turnOver', finishedPlayer, nextPlayer });
   }
 
   function buildFinalScreen(){
@@ -436,12 +485,12 @@
       ${winner!==0 ? `<div class="trophyBig">🏆</div>` : ''}
       <div class="finalRow">
         <div class="finalCard ${winner===1?'winner':''}">
-          <div class="fname" style="color:${SHIPS[playerShip[1]].color}">PLAYER 1${winner===1?' 🏆':''}</div>
+          <div class="fname" style="color:${(SHIPS[playerShip[1]]||SHIPS.shivam).color}">PLAYER 1${winner===1?' 🏆':''}</div>
           <div class="fscore">${s1}</div>
           <div class="fwave">WAVE ${matchWaves[1]}</div>
         </div>
         <div class="finalCard ${winner===2?'winner':''}">
-          <div class="fname" style="color:${SHIPS[playerShip[2]].color}">PLAYER 2${winner===2?' 🏆':''}</div>
+          <div class="fname" style="color:${(SHIPS[playerShip[2]]||SHIPS.shivangi).color}">PLAYER 2${winner===2?' 🏆':''}</div>
           <div class="fscore">${s2}</div>
           <div class="fwave">WAVE ${matchWaves[2]}</div>
         </div>
@@ -453,8 +502,10 @@
     document.getElementById('rematchBtn').addEventListener('click', ()=>{
       matchScores = { 1:0, 2:0 };
       matchWaves = { 1:0, 2:0 };
-      buildSelectScreen(1);
+      clearMatchState();
+      safeRun(()=> buildSelectScreen(1), 'rematch->select');
     });
+    saveMatchState({ stage:'final' });
   }
 
   // ---------- Audio (procedural, no external files) ----------
@@ -836,21 +887,41 @@
     matchScores[currentPlayerNum] = score;
     matchWaves[currentPlayerNum] = wave;
     if(currentPlayerNum === 1){
-      buildTurnOverScreen(1, score, wave);
+      safeRun(()=> buildTurnOverScreen(1, score, wave), 'gameOver->turnOver');
     } else {
-      buildFinalScreen();
+      safeRun(()=> buildFinalScreen(), 'gameOver->final');
     }
   }
 
   let loopTime = 0;
+  let rafId = null;
   function loop(now){
     if(!running || paused) return;
-    const dt = Math.min((now - loopTime)/16.67, 2.2);
-    loopTime = now;
-    frame++;
-    update(dt);
-    render();
-    requestAnimationFrame(loop);
+    try{
+      const dt = Math.min((now - loopTime)/16.67, 2.2);
+      loopTime = now;
+      frame++;
+      update(dt);
+      render();
+    }catch(err){
+      // Never let a single bad frame freeze the game — log it, stop this run
+      // safely, and drop the player straight into a recoverable screen
+      // instead of a silent hang that used to require a manual reload.
+      console.error('Game loop error:', err);
+      running = false;
+      turnBadge.classList.remove('show');
+      matchScores[currentPlayerNum] = score;
+      matchWaves[currentPlayerNum] = wave;
+      safeRun(()=>{
+        if(currentPlayerNum === 1){
+          buildTurnOverScreen(1, score, wave);
+        } else {
+          buildFinalScreen();
+        }
+      }, 'loop-crash-recovery');
+      return;
+    }
+    rafId = requestAnimationFrame(loop);
   }
 
   function update(dt){
@@ -1090,6 +1161,12 @@
     }
 
     if(shakeT>0) shakeT -= dt;
+
+    // Autosave running score periodically so a background tab or crash
+    // never actually loses progress — the *display* just needed a bug fix.
+    if(frame % 60 === 0){
+      saveMatchState({ stage:'playing', liveScore: score, liveWave: wave });
+    }
   }
 
   function updateBoss(dt){
@@ -1496,8 +1573,41 @@
     }
   }
 
+  // ---------- Startup: resume an interrupted match instead of always
+  // forcing Player 1 from scratch after a reload / tab switch. ----------
+  function boot(){
+    const saved = loadMatchState();
+    if(saved && saved.matchScores){
+      matchScores = saved.matchScores;
+      matchWaves = saved.matchWaves;
+      playerShip = saved.playerShip || playerShip;
+      currentPlayerNum = saved.currentPlayerNum || 1;
+
+      if(saved.stage === 'turnOver' && saved.nextPlayer){
+        safeRun(()=> buildTurnOverScreen(saved.finishedPlayer, matchScores[saved.finishedPlayer]||0, matchWaves[saved.finishedPlayer]||1), 'boot->turnOver');
+        return;
+      }
+      if(saved.stage === 'final'){
+        safeRun(()=> buildFinalScreen(), 'boot->final');
+        return;
+      }
+      if(saved.stage === 'select' && saved.pendingPlayer){
+        safeRun(()=> buildSelectScreen(saved.pendingPlayer), 'boot->select');
+        return;
+      }
+      if(saved.stage === 'playing'){
+        // A run was mid-flight when the page closed. Rather than silently
+        // losing it, land the same player back on the select screen with
+        // their in-progress score/wave preserved as the "to beat" number.
+        safeRun(()=> buildSelectScreen(saved.currentPlayerNum || 1), 'boot->playing-resume');
+        return;
+      }
+    }
+    safeRun(()=> buildSelectScreen(1), 'boot->fresh');
+  }
+
   render();
-  buildSelectScreen(1);
+  boot();
 })();
 </script>
 </body>
